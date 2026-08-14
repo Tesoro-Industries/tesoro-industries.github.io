@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verso — Support</title>
+<meta name="description" content="Support for Verso, the fanfic and EPUB reader by Tesoro Industries.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='3' fill='%230D1117'/><text x='16' y='23' font-family='Georgia,serif' font-style='italic' font-size='20' fill='%23E8E0D0' text-anchor='middle'>V</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0E0E0E;
+    --ink: #E8E6E1;
+    --ink-dim: #8A8782;
+    --rule: #1F1E1C;
+    --accent: #4A7DD8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { min-height: 100vh; display: grid; grid-template-rows: 1fr auto; padding: 48px 32px; }
+  main { width: 100%; max-width: 640px; margin: 0 auto; align-self: center; }
+  .meta { color: var(--ink-dim); font-size: 12px; letter-spacing: 0.04em; margin-bottom: 32px; }
+  .meta::before { content: "//"; margin-right: 0.6em; }
+  h1 { font-size: 14px; font-weight: 500; margin-bottom: 8px; }
+  .wordmark-rule { height: 1px; background: var(--ink); width: 100%; margin-bottom: 24px; opacity: 0.85; }
+  .tagline { color: var(--ink-dim); margin-bottom: 32px; }
+  h2 { font-size: 12px; font-weight: 500; color: var(--ink-dim); letter-spacing: 0.08em; text-transform: uppercase; margin: 32px 0 12px; }
+  p { margin-bottom: 16px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  footer { max-width: 640px; margin: 48px auto 0; width: 100%; color: var(--ink-dim); font-size: 12px; border-top: 1px solid var(--rule); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <p class="meta">tesoro industries / verso</p>
+  <h1>Verso — Support</h1>
+  <div class="wordmark-rule"></div>
+  <p class="tagline">A quiet, beautiful reader for fanfiction, web serials, and books.</p>
+
+  <h2>Getting help</h2>
+  <p>Questions, bug reports, and feature requests: email
+    <a href="mailto:dev@tesoroindustriesllc.com">dev@tesoroindustriesllc.com</a>.
+    Include your iOS version and a description of what happened — screenshots help.</p>
+
+  <h2>Common questions</h2>
+  <p><strong>How do I add a story?</strong> Tap + in the library. Paste text, open a .txt or DRM-free EPUB file, or paste a link to a public Archive of Our Own work.</p>
+  <p><strong>Why can't Verso import a work?</strong> Works restricted to logged-in Archive users can't be fetched. EPUBs with DRM can't be opened.</p>
+  <p><strong>How do I get better narration voices?</strong> iOS Settings → Accessibility → Spoken Content → Voices. Download any Premium or Enhanced voice and it appears in Verso automatically.</p>
+  <p><strong>Where is my library stored?</strong> Entirely on your device. See the <a href="privacy.html">privacy policy</a>.</p>
+
+  <h2>Independence</h2>
+  <p>Verso is an independent app and is not affiliated with, endorsed by, or sponsored by the Organization for Transformative Works or the Archive of Our Own.</p>
+</main>
+<footer>© 2026 Tesoro Industries LLC · <a href="privacy.html">Privacy</a> · <a href="../">Tesoro</a></footer>
+</body>
+</html>
