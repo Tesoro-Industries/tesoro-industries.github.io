@@ -1,0 +1,9 @@
+# Laptop / CI tooling (installed into .venv by `make init`). Needs Python >= 3.12
+# because of ansible-core; bin/vpn itself runs on Python >= 3.9.
+# Pinned to the versions Phase 1 was linted and tested with.
+ansible-core==2.22.0
+ansible-lint==26.11.0
+yamllint==1.38.0
+ruff==0.17.4
+pytest==9.2.0
+PyYAML==6.0.3

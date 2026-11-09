@@ -1,0 +1,86 @@
+# CI for the VPN project in vpn/ (see vpn/docs/adr/0010-testing-and-linting.md).
+# Path-filtered so it never runs for changes to the website.
+name: vpn-ci
+
+on:
+  push:
+    paths: ["vpn/**", ".github/workflows/vpn-ci.yml"]
+  pull_request:
+    paths: ["vpn/**", ".github/workflows/vpn-ci.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: vpn
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.4"
+          terraform_wrapper: false
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.59.1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Install system tools (without starting their services)
+        run: |
+          echo 'exit 101' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod +x /usr/sbin/policy-rc.d
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            shellcheck wireguard-tools qrencode age nftables unbound \
+            openssh-server fail2ban python3-systemd cloud-init
+          sudo install -d -m 0755 /run/sshd
+
+      - name: Install Python tooling and Ansible collections
+        run: |
+          pip install -r requirements-dev.txt
+          ansible-galaxy collection install -r ansible/requirements.yml -p ansible/collections
+
+      - name: Install gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.28.0 && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Initialise Terraform (downloads the provider for validate)
+        run: terraform -chdir=terraform init -backend=false -input=false
+
+      - name: Lint
+        run: LINT_STRICT=1 scripts/lint.sh
+
+      - name: Test
+        run: python -m pytest
+
+      - name: Kernel dry-run of the nftables ruleset (needs CAP_NET_ADMIN)
+        run: sudo -E env "PATH=$PATH" python -m pytest tests/test_ansible_templates.py -k nftables_kernel -rs
+
+  laptop-cli-python39:
+    # bin/vpn must run on macOS's system Python 3.9.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends wireguard-tools qrencode age
+          pip install pytest
+      - name: Test bin/vpn and vpnctl on Python 3.9
+        run: python -m pytest tests/test_vpn_cli.py tests/test_vpnctl.py
