@@ -74,9 +74,7 @@ class FakeRunner:
         if cmd[:2] == ["wg-quick", "strip"]:
             text = Path(cmd[2]).read_text()
             keep = [
-                ln
-                for ln in text.splitlines()
-                if not ln.startswith(("Address", "SaveConfig", "#"))
+                ln for ln in text.splitlines() if not ln.startswith(("Address", "SaveConfig", "#"))
             ]
             return subprocess.CompletedProcess(cmd, 0, "\n".join(keep) + "\n", "")
         return subprocess.CompletedProcess(cmd, 0, "", "")

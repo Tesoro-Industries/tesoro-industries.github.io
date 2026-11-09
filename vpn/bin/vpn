@@ -1,0 +1,599 @@
+#!/usr/bin/env python3
+"""vpn - operator CLI for the personal WireGuard VPN. Runs on your laptop.
+
+Generates client keys locally, registers public keys with the server's `vpnctl`
+over SSH, renders client configs and QR codes, and drives health checks and
+encrypted backups. See docs/adr/0007-peer-management.md.
+
+Requires: Python >= 3.9, ssh, wg (wireguard-tools); qrencode for QR codes;
+age for backups. Standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import datetime
+import ipaddress
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Iterable, Sequence
+from pathlib import Path
+
+SCHEMA = 1
+ROOT = Path(__file__).resolve().parent.parent
+REMOTE_VPNCTL = "/usr/local/sbin/vpnctl"
+NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$")
+FULL_TUNNEL = ("0.0.0.0/0", "::/0")
+
+
+class VpnError(Exception):
+    """An expected, user-facing error."""
+
+
+# --------------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------------
+
+
+def load_dotenv(path: Path, environ: dict) -> None:
+    """Minimal .env loader: KEY=VALUE lines; existing environment wins."""
+    if not path.exists():
+        return
+    for lineno, raw in enumerate(path.read_text().splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :]
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            raise VpnError(f"{path}:{lineno}: expected KEY=VALUE")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        environ.setdefault(key, value)
+
+
+class Paths:
+    def __init__(self, root: Path = ROOT) -> None:
+        self.root = root
+        self.local = root / "local"
+        self.peers = self.local / "peers"
+        self.backups = self.local / "backups"
+
+    def ensure_private_dir(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.local, 0o700)
+        os.chmod(path, 0o700)
+        return path
+
+    def peer_conf(self, name: str) -> Path:
+        return self.peers / f"{name}.conf"
+
+
+# --------------------------------------------------------------------------
+# Transport to the server's vpnctl
+# --------------------------------------------------------------------------
+
+
+class SshTransport:
+    """Builds the argv that runs `sudo vpnctl ARGS...` on the server over SSH."""
+
+    def __init__(self, ssh_config: Path, host: str) -> None:
+        self.ssh_config = ssh_config
+        self.host = host
+
+    def check(self) -> None:
+        if not self.ssh_config.exists():
+            raise VpnError(
+                f"SSH config {self.ssh_config} not found. Run `make infra` (it is generated "
+                "by Terraform) or write it by hand; see README, 'Other providers'."
+            )
+
+    def command(self, args: Sequence[str]) -> list[str]:
+        # ssh joins remote arguments into one string for the remote shell, so every
+        # argument is quoted here. Names and keys are validated as well.
+        remote = " ".join(shlex.quote(a) for a in ["sudo", "-n", REMOTE_VPNCTL, *args])
+        return [
+            "ssh",
+            "-F",
+            str(self.ssh_config),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
+            self.host,
+            remote,
+        ]
+
+
+def run_remote(transport, args: Sequence[str], stdin_text: str | None = None) -> str:
+    cmd = transport.command(args)
+    proc = subprocess.run(cmd, input=stdin_text, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or f"exit status {proc.returncode}"
+        raise VpnError(f"server command `vpnctl {args[0]}` failed: {detail}")
+    return proc.stdout
+
+
+def run_remote_json(transport, args: Sequence[str], stdin_text: str | None = None) -> dict:
+    out = run_remote(transport, args, stdin_text)
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        raise VpnError(f"unexpected response from vpnctl {args[0]}: {out[:200]!r}") from None
+    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
+        raise VpnError(
+            f"vpnctl response schema {data.get('schema') if isinstance(data, dict) else '?'} "
+            f"is not supported (expected {SCHEMA}); run `make configure` to update the server"
+        )
+    return data
+
+
+# --------------------------------------------------------------------------
+# Keys (all cryptography is done by the official `wg` tool)
+# --------------------------------------------------------------------------
+
+
+def require_tool(name: str, hint: str) -> str:
+    path = shutil.which(name)
+    if not path:
+        raise VpnError(f"`{name}` not found on PATH. {hint}")
+    return path
+
+
+def wg(*args: str, stdin: str | None = None) -> str:
+    require_tool("wg", "Install wireguard-tools (macOS: `brew install wireguard-tools`).")
+    proc = subprocess.run(["wg", *args], input=stdin, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise VpnError(f"`wg {args[0]}` failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def validate_key(key: str, what: str = "key") -> str:
+    key = key.strip()
+    try:
+        ok = len(key) == 44 and len(base64.b64decode(key, validate=True)) == 32
+    except (binascii.Error, ValueError):
+        ok = False
+    if not ok:
+        raise VpnError(f"invalid {what}: expected a 44-character base64 WireGuard key")
+    return key
+
+
+def validate_name(name: str) -> str:
+    if not NAME_RE.match(name):
+        raise VpnError(
+            f"invalid peer name {name!r}: use 1-32 characters of a-z, 0-9 and '-', "
+            "starting and ending with a letter or digit"
+        )
+    return name
+
+
+# --------------------------------------------------------------------------
+# Client config rendering
+# --------------------------------------------------------------------------
+
+
+def parse_networks(values: Iterable[str], what: str) -> list:
+    nets = []
+    for value in values:
+        for item in value.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                nets.append(ipaddress.ip_network(item, strict=True))
+            except ValueError as exc:
+                raise VpnError(f"invalid {what} {item!r}: {exc}") from None
+    return nets
+
+
+def subtract(nets: list, excludes: list) -> list:
+    """Remove every `excludes` range from `nets` (per address family)."""
+    result = list(nets)
+    for ex in excludes:
+        nxt = []
+        for net in result:
+            if net.version != ex.version or not net.overlaps(ex):
+                nxt.append(net)
+            elif net.subnet_of(ex):
+                continue  # fully excluded
+            else:
+                nxt.extend(net.address_exclude(ex))
+        result = nxt
+    return result
+
+
+def compute_allowed_ips(server: dict, allowed: list | None = None, exclude: list = ()) -> list:
+    """Client-side AllowedIPs.
+
+    Full tunnel (both families) unless `allowed` is given (split tunnel). The
+    server's tunnel addresses (the DNS resolver) are ALWAYS included, even when
+    excluded, so DNS can never bypass the tunnel (ADR-0006).
+    """
+    base = list(allowed) if allowed else parse_networks(FULL_TUNNEL, "network")
+    nets = subtract(base, list(exclude))
+    nets += [
+        ipaddress.ip_network(f"{server['server_ipv4']}/32"),
+        ipaddress.ip_network(f"{server['server_ipv6']}/128"),
+    ]
+    v4 = ipaddress.collapse_addresses([n for n in nets if n.version == 4])
+    v6 = ipaddress.collapse_addresses([n for n in nets if n.version == 6])
+    return [str(n) for n in list(v4) + list(v6)]
+
+
+def format_endpoint(host: str, port: int) -> str:
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            return f"[{host}]:{port}"
+    except ValueError:
+        pass
+    return f"{host}:{port}"
+
+
+def render_client_config(
+    *,
+    name: str,
+    private_key: str | None,
+    preshared_key: str,
+    peer: dict,
+    server: dict,
+    allowed_ips: list,
+    keepalive: int,
+) -> str:
+    split = set(allowed_ips) != {"0.0.0.0/0", "::/0"}
+    lines = [f"# WireGuard client config for peer '{name}'. Contains secrets; keep private."]
+    if split:
+        lines.append("# Split tunnel: only the AllowedIPs below go through the VPN.")
+    lines.append("[Interface]")
+    if private_key is None:
+        lines.append(
+            "# PrivateKey: keep the line your WireGuard app generated; paste everything else."
+        )
+    else:
+        lines.append(f"PrivateKey = {private_key}")
+    lines += [
+        f"Address = {peer['ipv4']}/32, {peer['ipv6']}/128",
+        f"DNS = {', '.join(server['dns'])}",
+        "",
+        "[Peer]",
+        f"PublicKey = {server['public_key']}",
+        f"PresharedKey = {preshared_key}",
+        f"Endpoint = {format_endpoint(server['endpoint'], int(server['listen_port']))}",
+        f"AllowedIPs = {', '.join(allowed_ips)}",
+    ]
+    if keepalive:
+        lines.append(f"PersistentKeepalive = {keepalive}")
+    return "\n".join(lines) + "\n"
+
+
+def write_private(path: Path, text: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def show_qr(text: str) -> bool:
+    if not shutil.which("qrencode"):
+        print(
+            "note: `qrencode` not installed; no QR code shown (macOS: `brew install qrencode`).",
+            file=sys.stderr,
+        )
+        return False
+    subprocess.run(["qrencode", "-t", "ansiutf8"], input=text, text=True, check=True)
+    return True
+
+
+def confirm(prompt: str) -> bool:
+    if not sys.stdin.isatty():
+        raise VpnError("confirmation required; re-run with --yes")
+    return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
+
+
+# --------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------
+
+
+def cmd_peer_add(ctx, args) -> int:
+    name = validate_name(args.name)
+    allowed = parse_networks(args.allowed_ips, "--allowed-ips") if args.allowed_ips else None
+    exclude = parse_networks(args.exclude, "--exclude")
+    if args.keepalive is not None and not 0 <= args.keepalive <= 65535:
+        raise VpnError("--keepalive must be between 0 and 65535 seconds")
+    conf_path = ctx.paths.peer_conf(name)
+    if not args.no_save and conf_path.exists() and not args.force:
+        raise VpnError(f"{conf_path} already exists; revoke the peer first or use --force")
+
+    if args.public_key:
+        public_key, private_key = validate_key(args.public_key, "--public-key"), None
+    else:
+        private_key = validate_key(wg("genkey"), "generated private key")
+        public_key = validate_key(wg("pubkey", stdin=private_key + "\n"), "public key")
+    preshared_key = validate_key(wg("genpsk"), "generated preshared key")
+
+    ctx.transport.check()
+    data = run_remote_json(
+        ctx.transport,
+        ["add", name, "--public-key", public_key, "--preshared-key-stdin", "--json"],
+        stdin_text=preshared_key + "\n",
+    )
+    peer, server = data["peer"], data["server"]
+    try:
+        allowed_ips = compute_allowed_ips(server, allowed, exclude)
+        keepalive = int(server["client_keepalive"]) if args.keepalive is None else args.keepalive
+        text = render_client_config(
+            name=name,
+            private_key=private_key,
+            preshared_key=preshared_key,
+            peer=peer,
+            server=server,
+            allowed_ips=allowed_ips,
+            keepalive=keepalive,
+        )
+        if not args.no_save:
+            ctx.paths.ensure_private_dir(ctx.paths.peers)
+            write_private(conf_path, text)
+    except BaseException:
+        print(
+            f"error after '{name}' was registered on the server; "
+            f"run `vpn peer revoke {name} --yes` and retry.",
+            file=sys.stderr,
+        )
+        raise
+
+    state = "active now" if data.get("applied_live") else "saved (interface down)"
+    print(f"Added peer '{name}' ({peer['ipv4']}, {peer['ipv6']}) - {state}.")
+    if private_key is None:
+        print("\nPaste this into the tunnel you created in the WireGuard app:\n")
+        print(text)
+    elif not args.no_qr:
+        print("Scan with the WireGuard app: + > Create from QR code\n")
+        show_qr(text)
+    if not args.no_save:
+        print(f"Config saved to {conf_path} (mode 0600).")
+    elif private_key is not None and args.no_qr:
+        print(text)
+    return 0
+
+
+def cmd_peer_list(ctx, args) -> int:
+    ctx.transport.check()
+    data = run_remote_json(ctx.transport, ["list", "--json"])
+    peers = data.get("peers", [])
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return 0
+    if not peers:
+        print("no peers")
+        return 0
+    now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+    print(f"{'NAME':<20} {'IPV4':<15} {'CREATED':<11} {'HANDSHAKE':<16} LOCAL CONFIG")
+    for p in peers:
+        hs = p.get("latest_handshake")
+        if not data.get("interface_up"):
+            hs_text = "interface down"
+        elif hs is None:
+            hs_text = "NOT LIVE"
+        elif hs == 0:
+            hs_text = "never"
+        else:
+            hs_text = f"{max(0, now - int(hs)) // 60}m ago"
+        local = "yes" if ctx.paths.peer_conf(p["name"]).exists() else "-"
+        print(f"{p['name']:<20} {p['ipv4']:<15} {p['created']:<11} {hs_text:<16} {local}")
+    return 0
+
+
+def cmd_peer_revoke(ctx, args) -> int:
+    name = validate_name(args.name)
+    if not args.yes and not confirm(f"Revoke '{name}'? Its device will lose access immediately."):
+        print("aborted")
+        return 1
+    ctx.transport.check()
+    data = run_remote_json(ctx.transport, ["revoke", name, "--json"])
+    conf_path = ctx.paths.peer_conf(name)
+    if conf_path.exists():
+        conf_path.unlink()
+        print(f"Deleted {conf_path}.")
+    state = "effective immediately" if data.get("applied_live") else "interface down"
+    print(f"Revoked '{name}' - {state}. Also delete the tunnel from the device's app.")
+    return 0
+
+
+def cmd_peer_qr(ctx, args) -> int:
+    conf_path = ctx.paths.peer_conf(validate_name(args.name))
+    if not conf_path.exists():
+        raise VpnError(f"{conf_path} not found (was it added with --no-save?)")
+    text = conf_path.read_text()
+    if "PrivateKey =" not in text:
+        raise VpnError("this config has no private key (added with --public-key); no QR possible")
+    return 0 if show_qr(text) else 1
+
+
+def cmd_health(ctx, args) -> int:
+    ctx.transport.check()
+    proc = subprocess.run(ctx.transport.command(["health"]), check=False)
+    return proc.returncode
+
+
+def _pipeline(producer: list, consumer: list, consumer_stdout=None) -> tuple[int, int, str]:
+    """Run `producer | consumer` without a shell. Returns both exit codes and stderr."""
+    with subprocess.Popen(producer, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as prod:
+        with subprocess.Popen(
+            consumer, stdin=prod.stdout, stdout=consumer_stdout, stderr=subprocess.PIPE
+        ) as cons:
+            prod.stdout.close()  # so the producer gets SIGPIPE if the consumer exits
+            _, cons_err = cons.communicate()
+        prod_err = prod.stderr.read()
+        prod.wait()
+    errors = b"\n".join(e.strip() for e in (prod_err, cons_err) if e and e.strip())
+    return prod.returncode, cons.returncode, errors.decode(errors="replace")
+
+
+def cmd_backup(ctx, args) -> int:
+    require_tool("age", "Install age (macOS: `brew install age`).")
+    recipient = args.recipient or os.environ.get("VPN_AGE_RECIPIENT", "")
+    if not recipient.startswith("age1"):
+        raise VpnError("set VPN_AGE_RECIPIENT in .env (an `age1...` public key) or --recipient")
+    ctx.transport.check()
+    out_dir = ctx.paths.ensure_private_dir(
+        Path(args.out_dir) if args.out_dir else ctx.paths.backups
+    )
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    final = out_dir / f"vpn-{stamp}.tar.age"
+    fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".backup.", suffix=".tmp")
+    os.close(fd)
+    try:
+        rc_ssh, rc_age, err = _pipeline(
+            ctx.transport.command(["backup"]), ["age", "-r", recipient, "-o", tmp]
+        )
+        if rc_ssh != 0 or rc_age != 0:
+            raise VpnError(f"backup failed (ssh={rc_ssh}, age={rc_age}): {err}")
+        if os.path.getsize(tmp) == 0:
+            raise VpnError("backup failed: empty output")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, final)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    print(f"Encrypted backup written to {final}")
+    return 0
+
+
+def cmd_restore(ctx, args) -> int:
+    require_tool("age", "Install age (macOS: `brew install age`).")
+    identity = args.identity or os.environ.get("VPN_AGE_IDENTITY", "")
+    if not identity or not Path(identity).exists():
+        raise VpnError("pass --identity PATH or set VPN_AGE_IDENTITY to your age identity file")
+    backup = Path(args.file)
+    if not backup.exists():
+        raise VpnError(f"{backup} not found")
+    if not args.yes and not confirm(
+        "Replace the server's private key and peer list with this backup?"
+    ):
+        print("aborted")
+        return 1
+    ctx.transport.check()
+    rc_age, rc_ssh, err = _pipeline(
+        ["age", "-d", "-i", identity, str(backup)], ctx.transport.command(["restore"])
+    )
+    if rc_age != 0 or rc_ssh != 0:
+        raise VpnError(f"restore failed (age={rc_age}, ssh={rc_ssh}): {err}")
+    if err:
+        print(err)
+    print("Restore complete. Run `vpn health` to verify.")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
+
+
+class Context:
+    def __init__(self, paths: Paths, transport) -> None:
+        self.paths = paths
+        self.transport = transport
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="vpn", description=__doc__.splitlines()[0])
+    parser.add_argument("--ssh-config", help="SSH config (default: local/ssh_config)")
+    parser.add_argument("--host", help="SSH host alias (default: vpn)")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    peer = sub.add_parser("peer", help="manage peers").add_subparsers(
+        dest="peer_cmd", required=True
+    )
+
+    p = peer.add_parser("add", help="add a peer and print its config/QR code")
+    p.add_argument("name", help="peer name, e.g. phone or laptop")
+    p.add_argument("--public-key", help="register an existing public key (keys made in the app)")
+    p.add_argument(
+        "--allowed-ips",
+        action="append",
+        metavar="CIDRS",
+        help="split tunnel: only route these comma-separated ranges through the VPN",
+    )
+    p.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="CIDRS",
+        help="ranges to keep OFF the VPN, e.g. your home LAN 192.168.1.0/24",
+    )
+    p.add_argument("--keepalive", type=int, help="PersistentKeepalive seconds (0 disables)")
+    p.add_argument("--no-save", action="store_true", help="do not keep a copy in local/peers/")
+    p.add_argument("--no-qr", action="store_true", help="do not print a QR code")
+    p.add_argument("--force", action="store_true", help="overwrite an existing local config")
+    p.set_defaults(func=cmd_peer_add)
+
+    p = peer.add_parser("list", help="list peers")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_peer_list)
+
+    p = peer.add_parser("revoke", help="revoke a peer (takes effect immediately)")
+    p.add_argument("name")
+    p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    p.set_defaults(func=cmd_peer_revoke)
+
+    p = peer.add_parser("qr", help="show the QR code for a saved peer config")
+    p.add_argument("name")
+    p.set_defaults(func=cmd_peer_qr)
+
+    p = sub.add_parser("health", help="run the server health check")
+    p.set_defaults(func=cmd_health)
+
+    p = sub.add_parser("backup", help="encrypted backup of server key + peers to local/backups")
+    p.add_argument("--recipient", help="age recipient (default: $VPN_AGE_RECIPIENT)")
+    p.add_argument("--out-dir", help="directory for the backup (default: local/backups)")
+    p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser("restore", help="restore server key + peers from an encrypted backup")
+    p.add_argument("file")
+    p.add_argument("--identity", help="age identity file (default: $VPN_AGE_IDENTITY)")
+    p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    p.set_defaults(func=cmd_restore)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None, ctx: Context | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        if ctx is None:
+            load_dotenv(ROOT / ".env", os.environ)
+            paths = Paths()
+            ssh_config = Path(
+                args.ssh_config
+                or os.environ.get("VPN_SSH_CONFIG")
+                or str(paths.local / "ssh_config")
+            )
+            host = args.host or os.environ.get("VPN_SSH_HOST") or "vpn"
+            ctx = Context(paths, SshTransport(ssh_config, host))
+        return args.func(ctx, args)
+    except VpnError as exc:
+        print(f"vpn: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -188,7 +188,7 @@ def test_add_syncs_live_interface(env, runner):
     pub = random_key()
     *_, live = vpnctl.add_peer(env, "phone", pub, None)
     assert live is True
-    (sync_cmd, sync_input), = runner.commands("wg", "syncconf")
+    ((sync_cmd, sync_input),) = runner.commands("wg", "syncconf")
     assert sync_cmd == ["wg", "syncconf", "wg0", "/dev/stdin"]
     assert pub in sync_input
     assert "Address" not in sync_input  # wg-quick strip output, not wg-quick format
@@ -252,10 +252,9 @@ def test_apply_refuses_peers_outside_networks(env):
 
 
 def test_lock_is_exclusive(env):
-    with vpnctl.locked(env):
-        with pytest.raises(E, match="another vpnctl"):
-            with vpnctl.locked(env, timeout=0.2):
-                pass
+    with vpnctl.locked(env):  # noqa: SIM117 - nested on purpose: tests run on Python 3.9
+        with pytest.raises(E, match="another vpnctl"), vpnctl.locked(env, timeout=0.2):
+            pass
 
 
 def test_atomic_write_leaves_no_temp_files(tmp_path):
@@ -295,8 +294,15 @@ def test_cli_add_json_contract(env, capsys, monkeypatch):
     assert "preshared_key" not in out.lower().replace("preshared-key", "")  # never echoed
     assert psk not in out
     assert data["server"]["public_key"] == fake_pubkey(env.key_path.read_text())
-    for field in ("endpoint", "listen_port", "dns", "server_ipv4", "server_ipv6",
-                  "client_keepalive", "ipv6_mode"):
+    for field in (
+        "endpoint",
+        "listen_port",
+        "dns",
+        "server_ipv4",
+        "server_ipv6",
+        "client_keepalive",
+        "ipv6_mode",
+    ):
         assert field in data["server"]
     assert data["applied_live"] is False
 
@@ -312,7 +318,9 @@ def test_cli_list_reports_live_state(env, runner, capsys, monkeypatch):
     a, b = random_key(), random_key()
     vpnctl.add_peer(env, "a", a, None)
     vpnctl.add_peer(env, "b", b, None)
-    dump = "priv\tpub\t51820\toff\n" + f"{a}\t(none)\t198.51.100.7:4444\t10.99.0.2/32\t1700000000\t1\t2\t25\n"
+    dump = "priv\tpub\t51820\toff\n" + "\t".join(
+        [a, "(none)", "198.51.100.7:4444", "10.99.0.2/32", "1700000000", "1", "2", "25\n"]
+    )
     runner.outputs[("wg", "show", "wg0", "dump")] = (0, dump)
     rc, out, _ = run_cli(env, ["list", "--json"], capsys=capsys, monkeypatch=monkeypatch)
     data = json.loads(out)
@@ -524,6 +532,8 @@ def test_real_wg_pubkey_and_config_parse(tmp_path):
     if __import__("shutil").which("wg-quick"):
         stripped = subprocess.run(
             ["wg-quick", "strip", str(config / "wg0.conf")],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         assert "Address" not in stripped and peer_pub in stripped
