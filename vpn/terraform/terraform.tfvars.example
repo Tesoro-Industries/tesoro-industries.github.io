@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars (git-ignored) and edit.
+
+# Closest region to you: sfo3, nyc3, tor1, ams3, fra1, lon1, sgp1, blr1, syd1 ...
+region = "sfo3"
+
+# Your SSH public key (create one with: ssh-keygen -t ed25519 -f ~/.ssh/vpn_ed25519)
+ssh_public_key_path  = "~/.ssh/vpn_ed25519.pub"
+ssh_private_key_path = "~/.ssh/vpn_ed25519"
+
+# Optional: restrict SSH at the provider firewall to ranges you control.
+# ssh_allowed_cidrs = ["203.0.113.0/24"]
+
+# Optional overrides
+# name       = "vpn"
+# size       = "s-1vcpu-1gb"
+# admin_user = "wgadmin"

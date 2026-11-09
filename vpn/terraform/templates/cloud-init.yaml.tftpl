@@ -1,0 +1,30 @@
+#cloud-config
+# First-boot bootstrap only (ADR-0003). Ansible re-asserts everything here and
+# is the source of truth afterwards. No "default" user: Ubuntu's `ubuntu` user
+# is not created.
+disable_root: true
+ssh_pwauth: false
+
+users:
+  - name: ${admin_user}
+    gecos: VPN administrator
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ${jsonencode(ssh_public_key)}
+
+# 00- sorts before the image's 50-cloud-init.conf; sshd keeps the first value.
+write_files:
+  - path: /etc/ssh/sshd_config.d/00-vpn-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AllowUsers ${admin_user}
+
+runcmd:
+  - [systemctl, try-reload-or-restart, ssh.service]
