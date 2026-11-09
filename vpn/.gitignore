@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# Secrets & machine-specific state. See docs/adr/0008-secrets-and-local-state.md
+# Nothing secret is ever tracked; only *.example files are.
+# ---------------------------------------------------------------------------
+
+# Single local-only directory: terraform state, inventory, ssh config,
+# known_hosts, peer configs (client private keys), encrypted backups.
+/local/
+
+# Environment / credentials
+.env
+.env.*
+!.env.example
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Keys and configs that must never be committed, wherever they appear
+*.key
+*.pem
+*.age
+wg*.conf
+
+# Ansible
+ansible/collections/
+*.retry
+
+# Python / tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
