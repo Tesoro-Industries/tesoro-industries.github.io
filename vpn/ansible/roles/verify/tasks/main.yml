@@ -7,12 +7,14 @@
   register: verify_health
   changed_when: false
   failed_when: false
+  check_mode: false # read-only
 
 - name: Show health check
   ansible.builtin.debug:
     var: verify_health.stdout_lines
 
 - name: Assert the server is healthy
+  when: not ansible_check_mode
   ansible.builtin.assert:
     that: verify_health.rc == 0
     fail_msg: Health check failed; see the output above and README "Troubleshooting".

@@ -18,6 +18,7 @@
 - name: Validate the complete sshd configuration
   ansible.builtin.command: /usr/sbin/sshd -t
   changed_when: false
+  check_mode: false # read-only; also run under `make check`
 
 - name: Apply sshd changes now
   ansible.builtin.meta: flush_handlers
@@ -26,6 +27,7 @@
   ansible.builtin.command: /usr/sbin/sshd -T
   register: ssh_hardening_effective
   changed_when: false
+  check_mode: false # read-only; the assert below needs real output
 
 - name: Assert root and password login are impossible
   ansible.builtin.assert:

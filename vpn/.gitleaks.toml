@@ -7,3 +7,17 @@ id = "wireguard-key-assignment"
 description = "WireGuard private or preshared key in a config"
 regex = '''(?i)(private_?key|preshared_?key)\s*[=:]\s*["']?[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]='''
 keywords = ["privatekey", "presharedkey", "private_key", "preshared_key"]
+
+# Git-ignored locations: local/ holds real secrets BY DESIGN (ADR-0008) and the
+# rest are tool caches. Only files that can be committed are scanned.
+[allowlist]
+description = "git-ignored paths"
+paths = [
+  '''(^|/)local/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)\.pytest_cache/''',
+  '''(^|/)\.ruff_cache/''',
+  '''(^|/)\.terraform/''',
+  '''(^|/)ansible/collections/''',
+  '''(^|/)\.env$''',
+]
