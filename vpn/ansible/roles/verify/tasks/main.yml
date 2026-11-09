@@ -1,0 +1,19 @@
+---
+- name: Apply pending changes before verifying
+  ansible.builtin.meta: flush_handlers
+
+- name: Run vpnctl health check
+  ansible.builtin.command: "{{ wireguard_vpnctl_path | default('/usr/local/sbin/vpnctl') }} health"
+  register: verify_health
+  changed_when: false
+  failed_when: false
+
+- name: Show health check
+  ansible.builtin.debug:
+    var: verify_health.stdout_lines
+
+- name: Assert the server is healthy
+  ansible.builtin.assert:
+    that: verify_health.rc == 0
+    fail_msg: Health check failed; see the output above and README "Troubleshooting".
+    quiet: true

@@ -1,0 +1,17 @@
+---
+# Configure a WireGuard VPN server. Safe to re-run (idempotent).
+# Usage: make configure    (or: ansible-playbook site.yml)
+- name: Configure VPN server
+  hosts: vpn
+  become: true
+  gather_facts: true
+  roles:
+    - role: base
+    - role: ssh_hardening
+    - role: sysctl
+    - role: firewall
+    - role: fail2ban
+    - role: unattended_upgrades
+    - role: wireguard
+    - role: unbound
+    - role: verify

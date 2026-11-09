@@ -1,0 +1,38 @@
+---
+- name: Refuse to lock out the connecting user
+  ansible.builtin.assert:
+    that: ansible_user in ssh_hardening_allow_users
+    fail_msg: "ansible_user {{ ansible_user }} is not in ssh_hardening_allow_users; this would lock you out."
+    quiet: true
+
+- name: Install sshd hardening drop-in
+  ansible.builtin.template:
+    src: 00-vpn-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/00-vpn-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd
+
+- name: Validate the complete sshd configuration
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+
+- name: Apply sshd changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Read effective sshd configuration
+  ansible.builtin.command: /usr/sbin/sshd -T
+  register: ssh_hardening_effective
+  changed_when: false
+
+- name: Assert root and password login are impossible
+  ansible.builtin.assert:
+    that:
+      - "'permitrootlogin no' in ssh_hardening_effective.stdout_lines"
+      - "'passwordauthentication no' in ssh_hardening_effective.stdout_lines"
+      - "'kbdinteractiveauthentication no' in ssh_hardening_effective.stdout_lines"
+      - "'authenticationmethods publickey' in ssh_hardening_effective.stdout_lines"
+    fail_msg: Effective sshd configuration still allows root or password login.
+    quiet: true

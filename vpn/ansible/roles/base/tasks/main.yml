@@ -1,0 +1,97 @@
+---
+- name: Assert supported operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_version'] in vpn_supported_ubuntu_versions
+    fail_msg: >-
+      Unsupported OS {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }};
+      supported: Ubuntu {{ vpn_supported_ubuntu_versions | join(', ') }} (ADR-0002).
+    quiet: true
+
+- name: Assert required settings
+  ansible.builtin.assert:
+    that:
+      - vpn_endpoint is defined
+      - vpn_endpoint | string | length > 0
+      - vpn_ipv6_mode in ['tunnel', 'block']
+      - admin_user not in ['root', 'ubuntu']
+      - vpn_listen_port | int > 0
+    fail_msg: >-
+      Set vpn_endpoint in local/inventory.yml (Terraform generates it), keep
+      vpn_ipv6_mode tunnel|block, and connect as a non-root admin user.
+    quiet: true
+
+- name: Assert the host has a default IPv4 route
+  ansible.builtin.assert:
+    that: ansible_facts['default_ipv4']['interface'] is defined
+    fail_msg: No default IPv4 route; cannot determine the WAN interface.
+    quiet: true
+
+- name: Assert IPv6 connectivity for tunnel mode
+  when: vpn_ipv6_mode == 'tunnel'
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['default_ipv6']['address'] is defined
+      - not (ansible_facts['default_ipv6']['address'] | lower).startswith('fe80')
+    fail_msg: >-
+      vpn_ipv6_mode is 'tunnel' but the host has no global IPv6 address. Enable IPv6
+      at the provider or set vpn_ipv6_mode: block (ADR-0005).
+    quiet: true
+
+- name: Install required packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Remove ufw so nftables is the only host firewall (ADR-0004)
+  ansible.builtin.apt:
+    name: ufw
+    state: absent
+    purge: true
+
+- name: Lock the root account password
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+
+- name: Ensure the admin user is a sudoer
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    groups: [sudo]
+    append: true
+    password_lock: true
+
+- name: Allow the admin user passwordless sudo (ADR-0012)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-vpn-admin
+    content: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Create journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Bound journald retention (ADR-0011)
+  ansible.builtin.template:
+    src: journald.conf.j2
+    dest: /etc/systemd/journald.conf.d/90-vpn.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+
+- name: Ensure time synchronisation is running
+  ansible.builtin.systemd_service:
+    name: systemd-timesyncd
+    enabled: true
+    state: started

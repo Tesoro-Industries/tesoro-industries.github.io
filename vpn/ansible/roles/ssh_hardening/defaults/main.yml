@@ -1,0 +1,4 @@
+---
+ssh_hardening_allow_users: ["{{ admin_user }}"]
+ssh_hardening_max_auth_tries: 3
+ssh_hardening_login_grace_time: 30

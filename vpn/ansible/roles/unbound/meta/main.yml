@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: unbound
+  author: vpn
+  description: Tunnel-only DNS resolver with DoT upstream (ADR-0006)
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions: [noble]
+dependencies: []

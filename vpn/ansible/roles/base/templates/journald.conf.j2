@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# Bounded log retention; no traffic is logged anywhere (ADR-0011).
+[Journal]
+SystemMaxUse={{ base_journald_max_use }}
+MaxRetentionSec={{ base_journald_max_retention }}

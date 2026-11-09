@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+# Named 00-* so it is read before the image's 50-cloud-init.conf: sshd keeps
+# the FIRST value it sees for each keyword (ADR-0012).
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AllowUsers {{ ssh_hardening_allow_users | join(' ') }}
+MaxAuthTries {{ ssh_hardening_max_auth_tries }}
+LoginGraceTime {{ ssh_hardening_login_grace_time }}
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PermitTunnel no
+ClientAliveInterval 300
+ClientAliveCountMax 2

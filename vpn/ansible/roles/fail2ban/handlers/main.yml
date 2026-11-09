@@ -1,0 +1,11 @@
+---
+- name: Validate fail2ban configuration
+  ansible.builtin.command: fail2ban-client --test
+  changed_when: false
+  listen: Restart fail2ban
+
+- name: Restart fail2ban service
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    state: restarted
+  listen: Restart fail2ban

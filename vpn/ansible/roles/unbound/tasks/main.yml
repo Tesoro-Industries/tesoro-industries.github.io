@@ -1,0 +1,24 @@
+---
+- name: Assert tunnel networks use the .1 / ::1 server address convention
+  ansible.builtin.assert:
+    that:
+      - vpn_ipv4_network is match('^\d+\.\d+\.\d+\.0/\d+$')
+      - vpn_ipv6_network is match('^[0-9a-fA-F:]+::/\d+$')
+    fail_msg: vpn_ipv4_network must end in .0/N and vpn_ipv6_network in ::/N.
+    quiet: true
+
+- name: Configure unbound
+  ansible.builtin.template:
+    src: vpn.conf.j2
+    dest: /etc/unbound/unbound.conf.d/vpn.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/unbound-checkconf %s
+  notify: Restart unbound
+
+- name: Enable and start unbound
+  ansible.builtin.systemd_service:
+    name: unbound
+    enabled: true
+    state: started

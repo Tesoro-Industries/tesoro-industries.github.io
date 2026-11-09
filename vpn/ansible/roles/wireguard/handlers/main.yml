@@ -1,0 +1,12 @@
+---
+# Order matters: handlers run in the order defined here.
+- name: Apply WireGuard config
+  ansible.builtin.command: "{{ wireguard_vpnctl_path }} apply"
+  changed_when: true
+
+# Address or port changes need wg-quick to re-create the interface. Clients
+# re-handshake automatically within seconds.
+- name: Restart WireGuard
+  ansible.builtin.systemd_service:
+    name: "wg-quick@{{ vpn_interface }}"
+    state: restarted

@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  role_name: fail2ban
+  author: vpn
+  description: fail2ban sshd jail using nftables (ADR-0012)
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions: [noble]
+dependencies: []

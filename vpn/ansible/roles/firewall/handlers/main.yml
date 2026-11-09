@@ -1,0 +1,7 @@
+---
+# Reload re-runs `nft -f /etc/nftables.conf`, which atomically replaces only
+# this project's tables (fail2ban's table is left alone).
+- name: Reload nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: reloaded

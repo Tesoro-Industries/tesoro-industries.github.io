@@ -1,0 +1,10 @@
+{{ {
+  "schema": 1,
+  "interface": vpn_interface,
+  "listen_port": vpn_listen_port | int,
+  "endpoint": vpn_endpoint | string,
+  "ipv4_network": vpn_ipv4_network,
+  "ipv6_network": vpn_ipv6_network,
+  "ipv6_mode": vpn_ipv6_mode,
+  "client_keepalive": vpn_client_keepalive | int,
+} | to_nice_json(sort_keys=true) }}

@@ -1,0 +1,3 @@
+---
+# Only use IPv6 upstreams if the host itself has IPv6 connectivity.
+unbound_upstream_ipv6: "{{ ansible_facts['default_ipv6']['address'] is defined }}"

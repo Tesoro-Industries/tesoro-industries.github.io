@@ -1,0 +1,7 @@
+---
+profile: production
+exclude_paths:
+  - collections/
+  - ../local/
+# site.yml targets the generated inventory; lint with a stand-in.
+offline: true

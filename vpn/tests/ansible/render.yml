@@ -1,0 +1,42 @@
+---
+# Renders every role template locally with the real Ansible template engine,
+# so tests can validate them with nft/unbound-checkconf/sshd/fail2ban/visudo.
+# Usage (from tests): ansible-playbook render.yml -e out_dir=DIR -e @scenario.json
+- name: Render role templates for tests
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../ansible/group_vars/all.yml
+    - ../../ansible/roles/base/defaults/main.yml
+    - ../../ansible/roles/ssh_hardening/defaults/main.yml
+    - ../../ansible/roles/fail2ban/defaults/main.yml
+    - ../../ansible/roles/unattended_upgrades/defaults/main.yml
+    - ../../ansible/roles/sysctl/vars/main.yml
+  vars:
+    ansible_user: wgadmin
+    vpn_endpoint: 192.0.2.20
+    roles_dir: "{{ playbook_dir }}/../../ansible/roles"
+    templates:
+      - { src: firewall/templates/nftables.conf.j2, dest: nftables.conf }
+      - { src: unbound/templates/vpn.conf.j2, dest: unbound-vpn.conf }
+      - { src: ssh_hardening/templates/00-vpn-hardening.conf.j2, dest: sshd-hardening.conf }
+      - { src: fail2ban/templates/jail.local.j2, dest: jail.local }
+      - { src: fail2ban/templates/fail2ban.local.j2, dest: fail2ban.local }
+      - { src: unattended_upgrades/templates/20auto-upgrades.j2, dest: 20auto-upgrades }
+      - { src: unattended_upgrades/templates/52vpn-unattended-upgrades.j2, dest: 52vpn-unattended-upgrades }
+      - { src: base/templates/journald.conf.j2, dest: journald.conf }
+      - { src: wireguard/templates/vpnctl.json.j2, dest: vpnctl.json }
+  tasks:
+    - name: Render templates
+      ansible.builtin.template:
+        src: "{{ roles_dir }}/{{ item.src }}"
+        dest: "{{ out_dir }}/{{ item.dest }}"
+        mode: "0600"
+      loop: "{{ templates }}"
+
+    - name: Dump resolved sysctl settings
+      ansible.builtin.copy:
+        content: "{{ sysctl_settings | to_nice_json }}\n"
+        dest: "{{ out_dir }}/sysctl.json"
+        mode: "0600"

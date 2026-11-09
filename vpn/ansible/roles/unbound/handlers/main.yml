@@ -1,0 +1,11 @@
+---
+- name: Validate complete unbound configuration
+  ansible.builtin.command: /usr/sbin/unbound-checkconf
+  changed_when: false
+  listen: Restart unbound
+
+- name: Restart unbound service
+  ansible.builtin.systemd_service:
+    name: unbound
+    state: restarted
+  listen: Restart unbound

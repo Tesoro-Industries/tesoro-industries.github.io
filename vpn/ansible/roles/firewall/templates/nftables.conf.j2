@@ -1,0 +1,84 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+# Host firewall and NAT for the VPN. See docs/adr/0004-host-firewall.md and
+# docs/adr/0005-ipv6-handling.md. No rule logs anything (ADR-0011).
+#
+# Only this project's tables are replaced. `flush ruleset` is deliberately NOT
+# used, so reloading never removes fail2ban's own table. The declare-then-delete
+# pairs below make the whole file one atomic replace, whether or not the
+# tables already exist.
+table inet vpn_filter
+delete table inet vpn_filter
+table inet vpn_nat
+delete table inet vpn_nat
+
+define WAN = "{{ vpn_wan_interface }}"
+define VPN = "{{ vpn_interface }}"
+define VPN_NET4 = {{ vpn_ipv4_network }}
+define VPN_NET6 = {{ vpn_ipv6_network }}
+
+table inet vpn_filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		ct state established,related accept
+		ct state invalid drop
+		iif "lo" accept
+
+		# ICMP needed for path-MTU discovery and basic diagnostics.
+		meta l4proto icmp icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } limit rate 20/second accept
+		# ICMPv6 needed for IPv6 to work at all (neighbour discovery, PMTU).
+		meta l4proto ipv6-icmp icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+
+		# Public services: SSH and WireGuard only.
+		tcp dport 22 ct state new accept
+		udp dport {{ vpn_listen_port }} accept
+
+		# DNS resolver: reachable ONLY from inside the tunnel (ADR-0006).
+		iifname $VPN meta l4proto { tcp, udp } th dport 53 accept
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+
+		# Clamp TCP MSS to the path MTU so large packets don't black-hole
+		# behind the tunnel's smaller MTU.
+		tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+
+		ct state established,related accept
+		ct state invalid drop
+
+		# Tunnel -> internet. Source must be a tunnel address (anti-spoofing).
+		iifname $VPN oifname $WAN ip saddr $VPN_NET4 accept
+{% if vpn_ipv6_mode == 'tunnel' %}
+		iifname $VPN oifname $WAN ip6 saddr $VPN_NET6 accept
+{% else %}
+		# vpn_ipv6_mode=block: IPv6 is captured by clients (::/0) and rejected
+		# here, so apps fall back to IPv4 immediately instead of leaking.
+		iifname $VPN meta nfproto ipv6 reject with icmpv6 type admin-prohibited
+{% endif %}
+{% if vpn_allow_peer_to_peer | bool %}
+		iifname $VPN oifname $VPN accept
+{% endif %}
+
+		# Anything else from the tunnel (peer-to-peer, private ranges via other
+		# interfaces) is refused with an error rather than silently dropped.
+		iifname $VPN reject with icmpx type admin-prohibited
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+	}
+}
+
+table inet vpn_nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+
+		oifname $WAN ip saddr $VPN_NET4 masquerade
+{% if vpn_ipv6_mode == 'tunnel' %}
+		# NAT66 from the ULA tunnel prefix to the host's public IPv6 (ADR-0005).
+		oifname $WAN ip6 saddr $VPN_NET6 masquerade
+{% endif %}
+	}
+}

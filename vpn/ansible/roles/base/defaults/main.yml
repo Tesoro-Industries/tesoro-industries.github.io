@@ -1,0 +1,12 @@
+---
+base_packages:
+  - wireguard-tools
+  - nftables
+  - unbound
+  - fail2ban
+  - python3-systemd # fail2ban systemd backend
+  - unattended-upgrades
+  - bind9-dnsutils # dig, used by the health check
+  - ca-certificates # DNS-over-TLS certificate verification
+base_journald_max_use: 200M
+base_journald_max_retention: 7day

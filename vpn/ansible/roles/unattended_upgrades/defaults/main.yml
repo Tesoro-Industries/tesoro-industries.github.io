@@ -1,0 +1,4 @@
+---
+# UTC. A required reboot (e.g. kernel update) happens at this time (ADR-0012).
+unattended_upgrades_reboot: true
+unattended_upgrades_reboot_time: "04:30"

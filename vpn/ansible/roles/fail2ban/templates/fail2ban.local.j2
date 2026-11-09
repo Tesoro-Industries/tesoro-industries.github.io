@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+# Keep ban history (attacker IPs) for one day only (ADR-0011).
+[DEFAULT]
+dbpurgeage = {{ fail2ban_dbpurgeage }}

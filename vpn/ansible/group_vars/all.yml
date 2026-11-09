@@ -1,0 +1,36 @@
+---
+# Project-wide settings. Override per host in local/inventory.yml.
+# Nothing here is secret; IPs/hostnames come from the generated inventory.
+
+# --- Identity / access -------------------------------------------------------
+# The non-root admin user (created by cloud-init; see ADR-0012).
+admin_user: "{{ ansible_user }}"
+
+# --- Network ---------------------------------------------------------------
+# Interface that carries the default route (NAT/forwarding egress).
+vpn_wan_interface: "{{ ansible_facts['default_ipv4']['interface'] }}"
+
+# --- WireGuard -------------------------------------------------------------
+# vpn_endpoint (public IP or DNS name clients connect to) MUST come from the
+# inventory. Terraform writes it to local/inventory.yml.
+vpn_interface: wg0
+vpn_listen_port: 51820
+vpn_ipv4_network: 10.99.0.0/24
+# Randomly generated RFC 4193 ULA prefix for this project (ADR-0005).
+vpn_ipv6_network: "fd5b:7a13:c0e2:9f41::/64"
+# tunnel: carry IPv6 through the VPN (NAT66). block: capture and reject it.
+vpn_ipv6_mode: tunnel
+# Seconds; keeps NAT mappings open on mobile networks (ADR-0007). 0 disables.
+vpn_client_keepalive: 25
+# Allow VPN clients to reach each other. Off: this is an egress VPN, not a LAN.
+vpn_allow_peer_to_peer: false
+
+# --- DNS (ADR-0006) -------------------------------------------------------
+vpn_dns_upstreams:
+  - { address: 9.9.9.9, tls_name: dns.quad9.net }
+  - { address: 149.112.112.112, tls_name: dns.quad9.net }
+  - { address: "2620:fe::fe", tls_name: dns.quad9.net }
+  - { address: "2620:fe::9", tls_name: dns.quad9.net }
+
+# --- Supported platforms (ADR-0002) ---------------------------------------
+vpn_supported_ubuntu_versions: ["24.04"]

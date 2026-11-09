@@ -1,0 +1,14 @@
+---
+# Order matters: accept_ra=2 on the WAN interface is set BEFORE IPv6 forwarding,
+# so enabling forwarding never makes the host ignore router advertisements.
+- name: Configure kernel parameters
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: "{{ sysctl_file }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ sysctl_settings }}"
+  loop_control:
+    label: "{{ item.name }} = {{ item.value }}"

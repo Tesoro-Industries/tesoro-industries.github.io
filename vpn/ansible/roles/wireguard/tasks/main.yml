@@ -1,0 +1,59 @@
+---
+- name: Create WireGuard configuration directory
+  ansible.builtin.file:
+    path: "{{ wireguard_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Generated on the server, first run only; it never leaves the server except
+# inside an age-encrypted backup (ADR-0007, ADR-0009).
+- name: Generate server private key
+  ansible.builtin.shell: |
+    set -o errexit
+    umask 077
+    wg genkey > "{{ wireguard_key_path }}.tmp"
+    mv "{{ wireguard_key_path }}.tmp" "{{ wireguard_key_path }}"
+  args:
+    creates: "{{ wireguard_key_path }}"
+    executable: /bin/bash
+  no_log: true
+
+- name: Restrict server private key permissions
+  ansible.builtin.file:
+    path: "{{ wireguard_key_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Install vpnctl
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../server/vpnctl.py"
+    dest: "{{ wireguard_vpnctl_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Apply WireGuard config
+
+- name: Write server parameters for vpnctl
+  ansible.builtin.template:
+    src: vpnctl.json.j2
+    dest: "{{ wireguard_config_dir }}/vpnctl.json"
+    owner: root
+    group: root
+    mode: "0600"
+  notify:
+    - Apply WireGuard config
+    - Restart WireGuard
+
+- name: Render interface configuration (first run)
+  ansible.builtin.command: "{{ wireguard_vpnctl_path }} apply"
+  args:
+    creates: "{{ wireguard_config_dir }}/{{ vpn_interface }}.conf"
+
+- name: Enable and start WireGuard
+  ansible.builtin.systemd_service:
+    name: "wg-quick@{{ vpn_interface }}"
+    enabled: true
+    state: started

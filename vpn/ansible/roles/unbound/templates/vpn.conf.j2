@@ -1,0 +1,48 @@
+# {{ ansible_managed }}
+# Tunnel-only resolver: DNSSEC-validating, forwarding over DNS-over-TLS.
+# See docs/adr/0006-dns-resolver.md. Nothing about queries is logged (ADR-0011).
+server:
+    # Listen ONLY on the tunnel addresses. ip-freebind lets unbound start
+    # before the WireGuard interface exists.
+    interface: {{ vpn_ipv4_network | regex_replace('\.0/\d+$', '.1') }}
+    interface: {{ vpn_ipv6_network | regex_replace('::/\d+$', '::1') }}
+    port: 53
+    ip-freebind: yes
+    do-ip4: yes
+    do-ip6: yes
+    do-udp: yes
+    do-tcp: yes
+
+    access-control: 0.0.0.0/0 refuse
+    access-control: ::/0 refuse
+    access-control: {{ vpn_ipv4_network }} allow
+    access-control: {{ vpn_ipv6_network }} allow
+
+    # No query logging.
+    verbosity: 0
+    log-queries: no
+    log-replies: no
+    log-tag-queryreply: no
+    log-servfail: no
+    log-local-actions: no
+
+    # Privacy / hardening.
+    hide-identity: yes
+    hide-version: yes
+    qname-minimisation: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    aggressive-nsec: yes
+    edns-buffer-size: 1232
+    prefetch: yes
+
+    # Verify upstream TLS certificates against the system CA bundle.
+    tls-cert-bundle: /etc/ssl/certs/ca-certificates.crt
+
+forward-zone:
+    name: "."
+    forward-tls-upstream: yes
+{% for upstream in vpn_dns_upstreams if (':' not in upstream.address) or (unbound_upstream_ipv6 | bool) %}
+    forward-addr: {{ upstream.address }}@853#{{ upstream.tls_name }}
+{% endfor %}

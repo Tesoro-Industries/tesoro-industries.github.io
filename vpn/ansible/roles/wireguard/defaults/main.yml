@@ -1,0 +1,4 @@
+---
+wireguard_config_dir: /etc/wireguard
+wireguard_key_path: "{{ wireguard_config_dir }}/server.key"
+wireguard_vpnctl_path: /usr/local/sbin/vpnctl

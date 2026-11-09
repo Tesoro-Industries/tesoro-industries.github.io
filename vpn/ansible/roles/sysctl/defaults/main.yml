@@ -1,0 +1,2 @@
+---
+sysctl_file: /etc/sysctl.d/90-vpn.conf
