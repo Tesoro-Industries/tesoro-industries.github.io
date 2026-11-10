@@ -93,7 +93,7 @@ Run from `vpn/` unless noted. Update §1 statuses as you go.
 
 **B. Laptop setup**
 
-4. [ ] `brew install python@3.12 wireguard-tools qrencode age && brew tap hashicorp/tap && brew install hashicorp/tap/terraform`
+4. [ ] `brew install python@3.13 wireguard-tools qrencode age && brew tap hashicorp/tap && brew install hashicorp/tap/terraform`
 5. [ ] `ssh-keygen -t ed25519 -f ~/.ssh/vpn_ed25519 -C "vpn admin"` (use a passphrase)
 6. [ ] `age-keygen -o ~/vpn-backup-identity.txt`, then move the identity file into your password manager.
 7. [ ] `cp .env.example .env` and fill in `DIGITALOCEAN_TOKEN`, `VPN_AGE_RECIPIENT`, `VPN_AGE_IDENTITY`.
@@ -221,8 +221,8 @@ Run from `vpn/` unless noted. Update §1 statuses as you go.
     server, which v1 avoids.
 12. **GitHub Actions are pinned by tag, not commit SHA.** **Recommendation:** pin
     to SHAs and enable Dependabot for `github-actions` after extracting the repo.
-13. **Laptop needs Python ≥ 3.12 for the Ansible venv** (ansible-core 2.22).
-    `bin/vpn` alone works on 3.9. If 3.12 is a problem, pin an older
+13. **Laptop needs Python ≥ 3.13 for the Ansible venv** (ansible-core 2.22).
+    `bin/vpn` alone works on 3.9. If 3.13 is a problem, pin an older
     ansible-core in `requirements-dev.txt` and re-run `make lint test`.
 14. **Automatic reboots at 04:30 UTC.** **Recommendation:** set
     `unattended_upgrades_reboot_time` (in `local/inventory.yml` or

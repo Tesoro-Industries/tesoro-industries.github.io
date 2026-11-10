@@ -102,12 +102,12 @@ Secrets on the laptop are kept only in `.env` and `local/`, and git ignores both
 package manager):
 
 ```sh
-brew install python@3.12 wireguard-tools qrencode age
+brew install python@3.13 wireguard-tools qrencode age
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 ```
 
 `make init` installs Ansible and the linters into `./.venv`, which needs Python
-3.12 or newer. `bin/vpn` itself runs on any Python from 3.9 up, including the
+3.13 or newer. `bin/vpn` itself runs on any Python from 3.9 up, including the
 macOS system Python. Windows: use WSL2 as the operator machine. The Windows
 WireGuard app works as a client either way.
 
