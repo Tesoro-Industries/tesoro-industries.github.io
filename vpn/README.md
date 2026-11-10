@@ -376,6 +376,7 @@ If the host has no IPv6, set `vpn_ipv6_mode: block` in the inventory.
 ```sh
 make lint   # shellcheck, ruff, yamllint, ansible-lint, terraform fmt/validate, tflint, gitleaks
 make test   # pytest: vpnctl, bin/vpn (incl. end-to-end), template rendering, repo hygiene
+sudo make test   # additionally runs the real-packet WireGuard lab in network namespaces (Linux)
 ```
 
 | Path | Purpose |

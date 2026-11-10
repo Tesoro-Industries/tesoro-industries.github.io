@@ -41,6 +41,16 @@ Three tiers:
      structurally (policies, ports, interface scoping); `nft -c` is run on the
      render when the environment permits.
    - Repository hygiene: no key-shaped strings or real IPs in tracked files.
+   - **Real-packet integration** (`tests/test_netns_integration.py`, root only):
+     client, server and "internet" network namespaces joined by veth pairs; the
+     server runs the rendered nftables ruleset, unbound and a WireGuard interface
+     managed by `vpnctl`; clients use configs from `bin/vpn`. It checks NAT/NAT66
+     egress, DNS through the tunnel, WAN exposure (SSH only), peer isolation,
+     anti-spoofing, live revocation, split tunnel and IPv6 block mode. It uses the
+     WireGuard kernel module where available, otherwise `wireguard-go`. It does
+     not cover systemd, Ansible execution, the provider network or devices.
+     *(Added 2026-11-10; supersedes the statement below that kernel-level
+     behaviour is only verified in Phase 2, for the parts listed here.)*
 3. **On-host verification** (Phase 2): `make configure` twice (second run must
    report zero changes), `vpn health`, and the manual leak tests in
    `docs/leak-testing.md` from each device.

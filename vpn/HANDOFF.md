@@ -1,6 +1,8 @@
 # HANDOFF
 
-Status as of the end of Phase 1 (cloud sandbox, no credentials, no real server).
+Status as of the end of Phase 1 (cloud sandbox, no credentials, no real server),
+plus a 2026-11-10 follow-up that added real-packet integration tests in Linux
+network namespaces (see "Integration lab" below).
 
 Verification labels used throughout:
 - **Verified**: ran in this environment and passed
@@ -11,7 +13,33 @@ Phase 1 toolchain: Python 3.13.18 and 3.9.25, ansible-core 2.22.0, ansible-lint
 26.11.0 (production profile), ansible.posix 2.1.0, yamllint 1.38.0, ruff 0.17.4,
 pytest 9.2.0, Terraform 1.13.4, tflint 0.59.1, gitleaks 8.28.0, shellcheck
 (Ubuntu 24.04), wireguard-tools, age, qrencode, nftables, unbound, openssh-server,
-fail2ban and cloud-init 26.2 (Ubuntu 24.04 packages).
+fail2ban and cloud-init 26.2 (Ubuntu 24.04 packages). Follow-up: wireguard-go
+0.0.20230223 (Ubuntu 24.04), because the sandbox kernel has no WireGuard
+module. The sandbox kernel also boots with `ipv6.disable=1`, so **no IPv6 path
+was exercised with real packets** here.
+
+### Integration lab (`tests/test_netns_integration.py`)
+
+Client, server and "internet" network namespaces are joined by veth pairs. The
+server namespace runs the nftables ruleset and unbound config **rendered from the
+Ansible templates**, plus a WireGuard interface managed by the real `vpnctl`.
+Clients bring up configs produced by `bin/vpn` with `wg-quick`. 12 tests pass and
+2 skip (IPv6). Each of four deliberate breakages was caught: removing NAT,
+opening all TCP, revoking without a live sync, and exposing DNS on the WAN.
+
+Verified there (IPv4, wireguard-go, not the kernel module, not DigitalOcean):
+real handshakes; NAT so websites see the server's address; DNS answered by
+unbound through the tunnel; unbound starting before `wg0` exists (ip-freebind);
+from the internet only SSH is reachable, and DNS/53 and other ports are blocked
+even with a listener present; tunnel clients cannot reach other server ports;
+peer-to-peer is blocked; spoofed sources are dropped; **revocation cuts a
+connected peer off immediately while the other peer keeps working**; a
+split-tunnel peer routes only its listed range, and DNS still goes through the
+tunnel; reloading the ruleset keeps foreign tables (fail2ban's).
+
+Written but **not run** here (they need IPv6): NAT66 egress, IPv6 DNS, IPv6 WAN
+exposure, and IPv6 `block` mode. They run in CI (GitHub runners have IPv6) once
+the branch can be pushed.
 
 ---
 
@@ -20,21 +48,21 @@ fail2ban and cloud-init 26.2 (Ubuntu 24.04 packages).
 | Component | Path | Status | Evidence |
 |-----------|------|--------|----------|
 | ADRs (12) | `docs/adr/` | n/a (docs) | |
-| Server peer tool `vpnctl` | `server/vpnctl.py` | **Verified** (unit level) | 71 tests: validation, allocation, rendering, add/revoke/rollback, lock, atomic writes, health logic, backup/restore with malicious archives. Real `wg pubkey` and `wg-quick strip` used. Passes on Python 3.13 and 3.9. |
+| Server peer tool `vpnctl` | `server/vpnctl.py` | **Verified** (unit level + live interface in netns lab) | 71 tests: validation, allocation, rendering, add/revoke/rollback, lock, atomic writes, health logic, backup/restore with malicious archives. Real `wg pubkey` and `wg-quick strip` used. Passes on Python 3.13 and 3.9. |
 | Laptop CLI `bin/vpn` | `bin/vpn` | **Verified** (unit + local end-to-end) | 23 tests. Split-tunnel maths, rendering, SSH quoting (injection test), `.env` parsing. End-to-end add → list → revoke → backup → restore against the real `vpnctl` in a subprocess, with real `wg` and `age`. Python 3.13 and 3.9. The **SSH hop itself is Unverified.** |
-| Client config validity | | **Verified** (parse only) | Rendered client config parsed by real `wg-quick strip`. Not imported into any app. |
+| Client config validity | | **Verified** (wg-quick, IPv4) | Parsed by `wg-quick strip`. Brought up by `wg-quick` in the netns lab and carried traffic; IPv6 lines removed there because the kernel lacks IPv6. Not imported into any app. |
 | Terraform templates (cloud-init, ssh_config, inventory) | `terraform/templates/` | **Verified** | Rendered by real `terraform` 1.13.4; cloud-init output passes `cloud-init schema`. |
 | Terraform resources | `terraform/*.tf` | **Statically checked** | `terraform fmt`, `tflint` (all bundled rules). **`terraform validate` NOT run**: the sandbox could not download the DigitalOcean provider, so attribute names (e.g. `droplet_agent`, `graceful_shutdown`) are unchecked against the provider schema. |
 | Ansible roles / playbook | `ansible/` | **Statically checked** | `ansible-lint --strict` (production), `--syntax-check`, `yamllint --strict`. Never run against a host. |
-| nftables ruleset | `roles/firewall/templates/nftables.conf.j2` | **Verified** (syntax and semantics, not traffic) | Rendered by Ansible for both IPv6 modes; `nft -c` dry run against the sandbox kernel passes; structure asserted (policies, open ports, DNS only on wg0, NAT/NAT66 per mode, no `flush ruleset`, no logging). No packets were filtered. |
-| unbound config | `roles/unbound/` | **Verified** (config only) | `unbound-checkconf` passes; listens only on tunnel IPs that match what `vpnctl` gives clients; no query logging. No DNS queries were resolved. |
+| nftables ruleset | `roles/firewall/templates/nftables.conf.j2` | **Verified** (IPv4 real packets; IPv6 syntax only) | `nft -c` passes for both modes and structure is asserted. IPv4 filtering and NAT verified with real packets in the netns lab (above). IPv6 rules (NAT66, block mode) not exercised with packets. |
+| unbound config | `roles/unbound/` | **Verified** (local answers; DoT upstream unverified) | `unbound-checkconf` passes. In the netns lab it served queries through the tunnel from a local zone and was unreachable from the WAN. The **DoT forward to Quad9 and DNSSEC validation were not exercised** (no internet in the lab). |
 | sshd hardening | `roles/ssh_hardening/` | **Verified** (config only) | `sshd -T` on the drop-in followed by a hostile later file (like `50-cloud-init.conf`): root/password login stay off. |
 | fail2ban config | `roles/fail2ban/` | **Verified** (config only) | `fail2ban-client --test` against the stock Ubuntu config plus ours. No bans tested. |
 | Unattended upgrades, journald, sysctl | roles | **Statically checked** + rendered | Templates rendered and asserted; sysctl ordering (accept_ra before forwarding) asserted. Not applied. |
 | Ansible → `vpnctl` JSON contract | `roles/wireguard/templates/vpnctl.json.j2` | **Verified** | Rendered JSON parsed by `vpnctl.ServerParams` in tests. |
 | Repo hygiene / secrets | `.gitignore`, `.gitleaks.toml`, `tests/test_repo_hygiene.py` | **Verified** | Hygiene test passes; gitleaks finds nothing in the repo and **does** detect a planted WireGuard key. |
 | Lint runner | `scripts/lint.sh`, `make lint` | **Verified** | `make lint` → all PASS except `terraform validate` (SKIP, see above). |
-| Test runner | `make test` | **Verified** | 127 passed, 0 skipped. |
+| Test runner | `make test` | **Verified** | 139 passed, 2 skipped (IPv6 integration tests; kernel lacks IPv6). As non-root the integration module skips. |
 | Makefile provisioning targets | `Makefile` | **Unverified** | `make help` ran. `init`, `plan`, `infra`, `up`, `configure`, `check`, `health`, `backup`, `destroy` need credentials or a server. |
 | CI workflow | `.github/workflows/vpn-ci.yml` | **Statically checked** | yamllint only. **Never ran**: the push to GitHub was refused (see §4). |
 | Docs | `README.md`, `docs/leak-testing.md` | n/a | Commands in them are Unverified until Phase 2. |
@@ -59,7 +87,9 @@ Run from `vpn/` unless noted. Update §1 statuses as you go.
    §4). To extract it with history:
    `git subtree split --prefix=vpn -b vpn-only && git push <new-private-repo-url> vpn-only:main`
 3. [ ] Check the CI run on the PR is green, especially `terraform validate`
-   (first real provider-schema check) and the root `nft -c` step.
+   (first real provider-schema check) and the root-only step. That step runs the
+   netns integration lab **with IPv6**, the first real-packet check of NAT66 and
+   block mode. If those two tests fail, fix them before provisioning.
 
 **B. Laptop setup**
 
