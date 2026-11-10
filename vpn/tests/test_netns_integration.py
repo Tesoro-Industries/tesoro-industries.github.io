@@ -210,6 +210,7 @@ def ipv4_only(conf_text: str) -> str:
 def lab(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("netns")
     procs: list[subprocess.Popen] = []
+    unbound_log = None
     try:
         for ns in NS.values():
             sh("ip", "netns", "add", ns)
@@ -253,14 +254,21 @@ def lab(tmp_path_factory):
         unbound_dir = tmp / "unbound"
         unbound_dir.mkdir()
         sh("unbound-checkconf", unbound_test_config(rendered, unbound_dir))
-        unbound_cmd = ["unbound", "-d", "-c", str(unbound_dir / "unbound.conf")]
-        procs.append(
-            subprocess.Popen(
-                ["ip", "netns", "exec", srv, *unbound_cmd],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        # Ubuntu's AppArmor profile for /usr/sbin/unbound only allows its usual
+        # paths (/etc/unbound, /var/lib/unbound), so it cannot read a config in
+        # a temp dir. AppArmor attaches by executable path: run a copy instead.
+        # (On the real server the config lives in /etc/unbound; nothing changes.)
+        unbound_bin = shutil.which("unbound")
+        if Path("/sys/kernel/security/apparmor").exists():
+            unbound_bin = shutil.copy2(unbound_bin, unbound_dir / "unbound")
+        unbound_log = open(unbound_dir / "unbound.log", "w")  # noqa: SIM115 - closed in finally
+        unbound_cmd = [str(unbound_bin), "-d", "-c", str(unbound_dir / "unbound.conf")]
+        unbound_proc = subprocess.Popen(
+            ["ip", "netns", "exec", srv, *unbound_cmd],
+            stdout=unbound_log,
+            stderr=subprocess.STDOUT,
         )
+        procs.append(unbound_proc)
 
         listener = tmp / "listen.py"
         listener.write_text(LISTENER)
@@ -296,6 +304,9 @@ def lab(tmp_path_factory):
 
         ctx = vpn_cli.Context(vpn_cli.Paths(tmp / "laptop"), NetnsTransport(config))
         time.sleep(0.5)  # let unbound and the echo server finish binding
+        if unbound_proc.poll() is not None:
+            log = (unbound_dir / "unbound.log").read_text()
+            raise AssertionError(f"unbound exited ({unbound_proc.returncode}):\n{log}")
         yield {"tmp": tmp, "config": config, "ctx": ctx, "rendered": rendered}
     finally:
         for ns in NS.values():
@@ -310,6 +321,8 @@ def lab(tmp_path_factory):
                 p.kill()
         for ns in NS.values():
             sh("ip", "netns", "del", ns, check=False)
+        if unbound_log is not None:
+            unbound_log.close()
 
 
 def connect_client(lab, ns_key: str, peer: str, *extra) -> Path:
