@@ -37,9 +37,9 @@ connected peer off immediately while the other peer keeps working**; a
 split-tunnel peer routes only its listed range, and DNS still goes through the
 tunnel; reloading the ruleset keeps foreign tables (fail2ban's).
 
-Written but **not run** here (they need IPv6): NAT66 egress, IPv6 DNS, IPv6 WAN
-exposure, and IPv6 `block` mode. They run in CI (GitHub runners have IPv6) once
-the branch can be pushed.
+The IPv6 cases (NAT66 egress, IPv6 DNS, IPv6 WAN exposure, IPv6 `block` mode)
+could not run in the sandbox, but **pass in CI** on GitHub runners, which have
+IPv6. In CI all 14 lab tests pass.
 
 ---
 
@@ -52,7 +52,7 @@ the branch can be pushed.
 | Laptop CLI `bin/vpn` | `bin/vpn` | **Verified** (unit + local end-to-end) | 23 tests. Split-tunnel maths, rendering, SSH quoting (injection test), `.env` parsing. End-to-end add → list → revoke → backup → restore against the real `vpnctl` in a subprocess, with real `wg` and `age`. Python 3.13 and 3.9. The **SSH hop itself is Unverified.** |
 | Client config validity | | **Verified** (wg-quick, IPv4) | Parsed by `wg-quick strip`. Brought up by `wg-quick` in the netns lab and carried traffic; IPv6 lines removed there because the kernel lacks IPv6. Not imported into any app. |
 | Terraform templates (cloud-init, ssh_config, inventory) | `terraform/templates/` | **Verified** | Rendered by real `terraform` 1.13.4; cloud-init output passes `cloud-init schema`. |
-| Terraform resources | `terraform/*.tf` | **Statically checked** | `terraform fmt`, `tflint` (all bundled rules). **`terraform validate` NOT run**: the sandbox could not download the DigitalOcean provider, so attribute names (e.g. `droplet_agent`, `graceful_shutdown`) are unchecked against the provider schema. |
+| Terraform resources | `terraform/*.tf` | **Statically checked** (incl. provider schema) | `terraform fmt`, `tflint`, and **`terraform validate` passes in CI** against the real DigitalOcean provider (PR #1). Nothing has been applied. |
 | Ansible roles / playbook | `ansible/` | **Statically checked** | `ansible-lint --strict` (production), `--syntax-check`, `yamllint --strict`. Never run against a host. |
 | nftables ruleset | `roles/firewall/templates/nftables.conf.j2` | **Verified** (IPv4 real packets; IPv6 syntax only) | `nft -c` passes for both modes and structure is asserted. IPv4 filtering and NAT verified with real packets in the netns lab (above). IPv6 rules (NAT66, block mode) not exercised with packets. |
 | unbound config | `roles/unbound/` | **Verified** (local answers; DoT upstream unverified) | `unbound-checkconf` passes. In the netns lab it served queries through the tunnel from a local zone and was unreachable from the WAN. The **DoT forward to Quad9 and DNSSEC validation were not exercised** (no internet in the lab). |
@@ -64,7 +64,7 @@ the branch can be pushed.
 | Lint runner | `scripts/lint.sh`, `make lint` | **Verified** | `make lint` → all PASS except `terraform validate` (SKIP, see above). |
 | Test runner | `make test` | **Verified** | 139 passed, 2 skipped (IPv6 integration tests; kernel lacks IPv6). As non-root the integration module skips. |
 | Makefile provisioning targets | `Makefile` | **Unverified** | `make help` ran. `init`, `plan`, `infra`, `up`, `configure`, `check`, `health`, `backup`, `destroy` need credentials or a server. |
-| CI workflow | `.github/workflows/vpn-ci.yml` | **Statically checked** | yamllint only. **Never ran**: the push to GitHub was refused (see §4). |
+| CI workflow | `.github/workflows/vpn-ci.yml` | **Verified** | Green on PR #1: strict lint, full test suite, the root-only netns lab **with IPv6**, and the Python 3.9 job. |
 | Docs | `README.md`, `docs/leak-testing.md` | n/a | Commands in them are Unverified until Phase 2. |
 | Anything on a real VPS or device | | **Unverified** | Not possible in the sandbox. |
 
@@ -81,12 +81,11 @@ Run from `vpn/` unless noted. Update §1 statuses as you go.
 
 **A. Repository**
 
-1. [ ] Fix GitHub push access for this repository (see §4). Then push:
-   `git push -u origin claude/personal-wireguard-vpn-1sjt58` and open the PR.
+1. [x] GitHub push access fixed; branch pushed; draft PR #1 opened.
 2. [ ] Decide whether to keep the project in this public Pages repository (see
    §4). To extract it with history:
    `git subtree split --prefix=vpn -b vpn-only && git push <new-private-repo-url> vpn-only:main`
-3. [ ] Check the CI run on the PR is green, especially `terraform validate`
+3. [x] CI on PR #1 is green (2026-11-10). It checked: especially `terraform validate`
    (first real provider-schema check) and the root-only step. That step runs the
    netns integration lab **with IPv6**, the first real-packet check of NAT66 and
    block mode. If those two tests fail, fix them before provisioning.
@@ -176,18 +175,9 @@ Run from `vpn/` unless noted. Update §1 statuses as you go.
    infrastructure layout is unnecessary. **Recommendation:** extract to a private
    repository (checklist step 2) and do not merge this PR into the site's
    default branch.
-2. **Push to GitHub was refused** (HTTP 403: the Claude GitHub App has no access
-   to `Tesoro-Industries/tesoro-industries.github.io`). All commits are local to
-   the Phase 1 sandbox on branch `claude/personal-wireguard-vpn-1sjt58`, and the
-   PR could not be opened. **Recommendation:** install or authorise the Claude
-   GitHub App for the organisation (or reconnect GitHub in claude.ai settings)
-   and ask for a push in this same session before the sandbox expires. Otherwise
-   the work is lost with the container.
-3. **Provider schema unverified.** `terraform validate` could not run. The
-   attributes most at risk are `droplet_agent` and `graceful_shutdown` on
-   `digitalocean_droplet`, and the `digitalocean_reserved_ip_assignment`
-   resource. **Recommendation:** run step 10; if an attribute is rejected,
-   remove it (both are hardening/nicety, not core).
+2. ~~Push to GitHub was refused.~~ Resolved: the branch is pushed and draft
+   PR #1 is open with green CI.
+3. ~~Provider schema unverified.~~ Resolved: `terraform validate` passes in CI.
 4. **Reserved IP reply path.** Clients connect to the Reserved IP, but the
    Droplet's own IP is its source address. WireGuard replies from the address a
    packet arrived on, and DigitalOcean translates anchor-IP traffic back to the
