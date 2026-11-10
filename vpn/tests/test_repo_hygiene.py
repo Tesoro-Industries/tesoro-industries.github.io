@@ -17,6 +17,9 @@ from conftest import ROOT
 WG_KEY = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{42}[AEIMQUYcgkosw480]=(?![A-Za-z0-9+/=])")
 # Assembled from parts so this file does not match its own patterns.
 PRIVATE_BLOCK = re.compile("-----BEGIN [A-Z ]*" + "PRIVATE KEY-----|AGE-SECRET" + "-KEY-1")
+# Terraform lock files pin providers with base64 SHA-256 hashes ("h1:<44 chars>"),
+# which have exactly the shape of a WireGuard key. They are not secrets.
+TF_HASH = re.compile(r"\bh1:[A-Za-z0-9+/]{43}=")
 IPV4 = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
 DO_TOKEN = re.compile(r"\bdop_v1_[a-f0-9]{64}\b")
 
@@ -64,7 +67,7 @@ def test_no_secrets_or_real_ips_in_repository():
         if text is None:
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            if WG_KEY.search(line):
+            if WG_KEY.search(TF_HASH.sub("", line)):
                 problems.append(f"{rel}:{lineno}: WireGuard-key-shaped string")
             if PRIVATE_BLOCK.search(line):
                 problems.append(f"{rel}:{lineno}: private key block")
@@ -84,10 +87,14 @@ def test_no_secrets_or_real_ips_in_repository():
         ("endpoint " + "164.90" + ".1.2", True),
         ("dns 9.9.9.9", False),
         ("net 10.99.0.0/24", False),
+        ('    "h1:' + "A" * 42 + 'E=",', False),  # .terraform.lock.hcl provider hash
+        ('"h1:' + "A" * 42 + 'E=" PrivateKey = ' + "B" * 42 + "E=", True),
     ],
 )
 def test_detectors(line, bad):
-    found = bool(WG_KEY.search(line)) or not all(ipv4_allowed(a) for a in IPV4.findall(line))
+    found = bool(WG_KEY.search(TF_HASH.sub("", line))) or not all(
+        ipv4_allowed(a) for a in IPV4.findall(line)
+    )
     assert found == bad
 
 
