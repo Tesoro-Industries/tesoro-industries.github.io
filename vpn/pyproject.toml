@@ -19,3 +19,4 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = ["integration: real-packet tests in network namespaces (root only)"]

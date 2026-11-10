@@ -46,7 +46,8 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
             shellcheck wireguard-tools qrencode age nftables unbound \
-            openssh-server fail2ban python3-systemd cloud-init
+            openssh-server fail2ban python3-systemd cloud-init \
+            wireguard-go bind9-dnsutils curl
           sudo install -d -m 0755 /run/sshd
 
       - name: Install Python tooling and Ansible collections
@@ -66,8 +67,11 @@ jobs:
       - name: Test
         run: python -m pytest
 
-      - name: Kernel dry-run of the nftables ruleset (needs CAP_NET_ADMIN)
-        run: sudo -E env "PATH=$PATH" python -m pytest tests/test_ansible_templates.py -k nftables_kernel -rs
+      - name: Root-only tests (nft kernel dry run, real-packet netns integration)
+        run: >-
+          sudo -E env "PATH=$PATH" python -m pytest -rs
+          tests/test_netns_integration.py
+          "tests/test_ansible_templates.py::test_nftables_kernel_dry_run"
 
   laptop-cli-python39:
     # bin/vpn must run on macOS's system Python 3.9.
